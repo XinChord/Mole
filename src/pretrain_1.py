@@ -300,6 +300,18 @@ def train(
     return
 
 
+def find_batch(index, L):
+    batch_index = 0
+    for step, batch in enumerate(L):
+        if batch_index == index:
+            description = batch[0]
+            molecule_data = batch[1]
+            return description, molecule_data
+        batch_index += 1
+    return
+
+
+
 def cal_distance(dataloader):
     if args.verbose:
         L = tqdm(dataloader)
@@ -313,14 +325,56 @@ def cal_distance(dataloader):
         description = batch[0]
         molecule_data = batch[1]
 
+        description_tokens_ids, description_masks = prepare_text_tokens(
+            device=device, description=description, tokenizer=text_tokenizer, max_seq_len=args.max_seq_len)
+        text_model.to(description_tokens_ids.device)
+        description_output = text_model(input_ids=description_tokens_ids, attention_mask=description_masks)
+        description_repr = description_output["pooler_output"]
+        description_repr = text2latent(description_repr)
+
+        np_distance = np.zeros((4, 8000))
+        for i in range(len(description_repr)):
+            for j in range(i, len(description_repr)):
+                if i == j:
+                    np_distance[i][j] = 1
+                    continue
+                tmp = np.linalg.norm(description_repr[i].cpu().detach().numpy() - \
+                      description_repr[j].cpu().detach().numpy())
+                np_distance[i][j] = tmp
+                np_distance[j][i] = tmp
+
+        # molecule_data = list(molecule_data)  # for SMILES_list
+        # molecule_repr = get_molecule_repr_MoleculeSTM(
+        #     molecule_data, mol2latent=mol2latent,
+        #     molecule_type=molecule_type, MegaMolBART_wrapper=MegaMolBART_wrapper)
+
+        for i in range(batch_count + 1, 2000):
+            batch_description, batch_molecule = find_batch(i, L)
+            batch_description_tokens_ids, batch_description_masks = prepare_text_tokens(
+                device=device, description=batch_description, tokenizer=text_tokenizer, max_seq_len=args.max_seq_len)
+            # text_model.to(batch_description_tokens_ids.device)
+            batch_description_output = text_model(input_ids=batch_description_tokens_ids, attention_mask=batch_description_masks)
+            batch_description_repr = batch_description_output["pooler_output"]
+            batch_description_repr = text2latent(batch_description_repr)
+            for z in range(len(description_repr)):
+                for j in range(len(batch_description_repr)):
+                    tmp = np.linalg.norm(
+                        description_repr[z].cpu().detach().numpy() - batch_description_repr[j].cpu().detach().numpy())
+                    np_distance[z][(batch_count+1) * 4 + j] = tmp
+
+        np.save("distance_.{}.npy".format(batch_count), np_distance)
         batch_count += 1
         if batch_count >= num_batches:
             break
 
-        for item in description:
-            description_list.append(item)
-        for item in molecule_data:
-            molecule_list.append(item)
+        # for item in description_repr:
+        #     description_list.append(item)
+        # for item in molecule_repr:
+        #     molecule_list.append(item)
+
+        # batch_count += 1
+        # if batch_count >= num_batches:
+        #     break
 
     # np_distance = np.zeros((2000, 4, ))
     # for i in range(len(description_list)):
@@ -331,15 +385,15 @@ def cal_distance(dataloader):
     #                 tmp = np.linalg.norm(item.cpu().detach().numpy() - tmp_item.cpu().detach().numpy())
     #                 np_distance
 
-    np_distance = np.zeros((8000, 8000))
-    for i in range(len(description_list)):
-        for j in range(len(description_list)):
-            if i == j:
-                np_distance[i][j] = 1
-            tmp = np.linalg.norm(description_list[i].cpu().detach().numpy() - description_list[j].cpu().detach().numpy())
-            np_distance[i][j] = tmp
+    # np_distance = np.zeros((8000, 8000))
+    # for i in range(len(description_list)):
+    #     for j in range(len(description_list)):
+    #         if i == j:
+    #             np_distance[i][j] = 1
+    #         tmp = np.linalg.norm(description_list[i].cpu().detach().numpy() - description_list[j].cpu().detach().numpy())
+    #         np_distance[i][j] = tmp
 
-    np.save("distance.npy", np_distance)
+    # np.save("distance.npy", np_distance)
 
     return 1
 
